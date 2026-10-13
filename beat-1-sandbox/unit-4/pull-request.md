@@ -15,15 +15,11 @@ label is not graded.
 
 **Pull request**
 
-[Link to the pull request you opened. It must be the pull request's own page on the Path
-Review repo, not your fork's branch page.]
+https://github.com/codepath/pathreview-ai301-fa26-s1/pull/179
 
 **Branch**
 
-[The name of the branch the pull request comes from, exactly as it appears in your fork.
-The naming shape is a type prefix, then the issue number, then a short description. **The
-issue number in the branch name must be the number of the issue the pull request fixes** —
-a name carrying any other number does not satisfy this field.]
+`fix/66-structlog`
 
 ## Eval iterations
 
@@ -32,28 +28,39 @@ fields.
 
 **Run history**
 
-[The agreement score of each run you did, in order. A single run is a complete answer if
-only one run occurred. **The last score in your list must match the agreement line in the
-`eval-run.txt` you committed** — that file is the record of your final run.]
+One full run: `agreement: 20/20 scored items (bar: 18/20: PASS)`.
+Every category met the category floor: clear-accept 7/7, not-tested
+4/4, silent-drift 4/4, standards-wall 2/2, unreviewable 3/3.
 
 **Package analysis**
 
-[Pick one scored package (`pkg-01` through `pkg-20` — the four `calib-` packages are never
-scored). Name it by id, say what your rubric decided and what the gold label said, and
-explain why your rubric read it that way.]
+`pkg-06`: my rubric returned `reject`, matching the gold label
+`reject`. The accepted plan limits the change to `IslandWindow.cpp`
+and `IslandWindow.h`, but the diff also adds
+`MenuFollowsWindowTheme` in `GlobalAppSettings.idl` and an experimental
+setting commit. The PR description says, "No functional changes
+outside the system menu fix," which the extra setting contradicts.
+That is silent scope drift against the plan.
 
 **Check rationale**
 
-[Quote one check from the `rubric.md` you uploaded to `tools/pr-precheck/`, exactly as it reads now.
-Then say why it reads that way — what you revised to get there, or what you rejected in
-favour of it.]
+> The diff implements the plan's approach to the behavior shown by the issue/reproduction, and every material change is within the plan's scope or explained by a specific, honest deviation recorded in the plan. The title and description accurately describe what the diff does and do not claim unimplemented work. A symptom-only change that does not address the plan's stated cause, unexplained extra or missing work, or a description contradicted by the diff fails.
+
+I made this a required check so the diff and the PR's claims are
+compared to the accepted plan, not graded in isolation. It catches
+both extra/unplanned changes and descriptions that overclaim what
+landed, while still allowing a clearly documented and coherent
+deviation.
 
 **Trade-offs**
 
-[Every check gives something up. Any one of these is a complete answer: a package whose
-result it changes, a canary you re-ran with `--only`, a case you accept it will miss, or a
-stated reason nothing changed elsewhere. "Nothing changed, and here is how I know" earns
-the point in full when the reason follows.]
+I made no rubric revisions after the full run: all 20 scored packages
+agreed with gold and all five category tallies met the floor, so there
+were no `NO` rows to re-grade with `--only`. The plan-fidelity rule
+does make the tool conservative about undocumented scope expansion:
+for example, it rejects `pkg-06` because the extra settings change is
+outside the plan and the description says there are no changes beyond
+the system-menu fix.
 
 ---
 
