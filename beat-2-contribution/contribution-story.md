@@ -55,10 +55,9 @@ happened; these entries are the toolkit's own timeline.
 All four entries are graded. Keep every heading below, and fill each
 one in the week it belongs to.
 
-**Unit 5: [one line on the tool work]**
+**Unit 5: Built the issue-scout and patched it after watching it fail**
 
-[2-4 sentences: what you built (the scout, your strategy), what broke
-or fell short, what changed because of it.]
+I installed issue-scout, wrote a fit profile and three `gh search issues` queries in `search-strategy.md`, and ran two live scans. The first scan rejected all 5 candidates because my ranking filter's tie-break ("most recently updated") was rewarding hours-old, disposable repos that couldn't pass the maturity checks — I fixed it by dropping issues under 48 hours old and tie-breaking on oldest `createdAt` instead. The second scan then surfaced two accepted candidates on a 12-year-old repo, but manually checking it turned up a gap the rubric never caught: its last GitHub Release was from 2016 despite active commits, so I added a new required "release is reasonably recent" check to `rubric.md`.
 
 **Unit 6: [one line on the tool work]**
 
