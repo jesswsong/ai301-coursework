@@ -126,31 +126,149 @@ Claim comment: https://github.com/ROCm/iris/issues/590#issuecomment-6731226113
 
 **Environment Setup**
 
-[What a stranger would need to stand this up: your operating system,
-the relevant versions (language, runtime, package manager, the project
-itself), and how you set the project up. Then the challenges you faced
-and how you solved them, or that none came up.]
+No AMD hardware available. `iris/host/platform/hip.py` loads a GPU vendor runtime library via `ctypes` at module-import time, so importing it at all needs at least that shared-library file present (no physical GPU required for that). I used a Docker container instead of real hardware: `python:3.11-slim`, Python 3.11.18, Linux 6.10.14-linuxkit-aarch64, `numpy` 2.4.6, `torch` 2.15.0+cpu, `nvidia-cuda-runtime-cu12` (ships `libcudart.so.12`, symlinked to the unversioned `libcudart.so` name `hip.py`'s fallback loader looks for).
+
+I did not `import iris` / `pip install -e ".[dev]"`: the top-level `iris/__init__.py` pulls in `triton` and a git-sourced `tritonBLAS` dependency, neither needed to exercise one caching function and both adding setup risk without adding evidence. `repro_isolated_hip.py` instead loads `iris/host/platform/hip.py` directly via `importlib.util.spec_from_file_location`, pre-registering empty stub packages in `sys.modules` for `iris`, `iris.host`, `iris.host.logging`, `iris.host.platform` (the parent packages `hip.py`'s own imports need present), and loading the real `iris/host/platform/libs.py` and `iris/host/logging/logging.py` for real (both stdlib-only, no heavy deps).
+
+Repo commit tested: `ROCm/iris@17226794ea885dde60072683b3522e4d149ca8ab` (fork `jesswsong/iris`, `main`, post-PR #595 merge).
+
+**Exact commands**, self-contained — run from any empty working directory. They create their own `repro-590/` folder and clone the repo; `repro_isolated_hip.py`'s full, unabridged contents are pasted below the command block — save that as `repro_isolated_hip.py` inside `repro-590/`, next to (not inside) the `iris/` clone, before running `docker run`:
+
+```bash
+mkdir -p repro-590 && cd repro-590
+git clone https://github.com/jesswsong/iris.git
+
+docker run --rm \
+  -v "$(pwd)/iris":/workspace \
+  -v "$(pwd)/repro_isolated_hip.py":/repro_isolated_hip.py \
+  -w /workspace python:3.11-slim bash -c '
+set -e
+pip install -q numpy nvidia-cuda-runtime-cu12
+pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+LIBFILE=$(find / -name "libcudart.so.*" 2>/dev/null | head -1)
+LIBDIR=$(dirname "$LIBFILE")
+ln -sf "$LIBFILE" "$LIBDIR"/libcudart.so
+export LD_LIBRARY_PATH="$LIBDIR":$LD_LIBRARY_PATH
+python3 /repro_isolated_hip.py
+'
+```
+
+`IRIS_REPO_PATH` (read by `repro_isolated_hip.py`, default `/workspace`, which is what the bind-mount above maps to) can be set to point at a different checkout layout than the one above.
+
+**`repro_isolated_hip.py`**, full contents — save exactly this as `repro-590/repro_isolated_hip.py`:
+
+```python
+"""
+Reproduction script for ROCm/iris#590: get_num_xcc() is not cached.
+
+Loads iris/host/platform/hip.py in isolation (stubbing the heavy parent
+`iris` package, which pulls in triton/tritonblas that aren't needed to
+reproduce this specific caching bug) and shows that, with
+get_rocm_version() mocked to avoid any real subprocess/ctypes calls,
+get_num_xcc() still re-invokes the underlying device-attribute lookup
+on every call, while get_rocm_version() (fixed by PR #595) does not.
+"""
+
+import importlib.util
+import os
+import sys
+import types
+from pathlib import Path
+from unittest import mock
+
+# Path to a checkout of ROCm/iris (or your fork). The exact command
+# block in repro-draft.md's "Environment Setup" section bind-mounts
+# the repo to /workspace inside the container; set IRIS_REPO_PATH to
+# override for a different layout.
+REPO = Path(os.environ.get("IRIS_REPO_PATH", "/workspace"))
+
+for name in [
+    "iris",
+    "iris.host",
+    "iris.host.logging",
+    "iris.host.platform",
+]:
+    sys.modules[name] = types.ModuleType(name)
+
+
+def load_real_module(dotted_name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(dotted_name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[dotted_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+load_real_module("iris.host.logging.logging", REPO / "iris/host/logging/logging.py")
+load_real_module("iris.host.platform.libs", REPO / "iris/host/platform/libs.py")
+hip = load_real_module("iris.host.platform.hip", REPO / "iris/host/platform/hip.py")
+
+print(f"Imported hip.py OK. _is_amd_backend = {hip._is_amd_backend}")
+print(f"get_rocm_version has lru_cache: {hasattr(hip.get_rocm_version, 'cache_info')}")
+print(f"get_num_xcc has lru_cache: {hasattr(hip.get_num_xcc, 'cache_info')}")
+print()
+
+# get_rocm_version() is already cached (PR #595) -- force the AMD code
+# path (this sandbox only has the CUDA runtime stub loaded) and confirm
+# subprocess runs once across 5 calls.
+hip.get_rocm_version.cache_clear()
+with mock.patch.object(hip, "_is_amd_backend", True), mock.patch.object(
+    hip.subprocess, "run", return_value=mock.Mock(stdout="/opt/rocm\n")
+) as run, mock.patch("builtins.open", mock.mock_open(read_data="7.1.0-12345\n")):
+    for _ in range(5):
+        hip.get_rocm_version()
+    print(f"get_rocm_version(): subprocess.run call_count over 5 calls = {run.call_count} (expected 1, cached)")
+
+# get_num_xcc() is NOT cached -- show the underlying device-attribute
+# lookup fires on every call even though get_rocm_version() underneath
+# it is now cheap. Replace gpu_runtime wholesale (a mock, not the real
+# CDLL) since the real object has no hip* symbols with only libcudart
+# loaded in this sandbox.
+hip.get_rocm_version.cache_clear()
+mock_gpu_runtime = mock.MagicMock()
+mock_gpu_runtime.hipDeviceGetAttribute.return_value = 0
+with mock.patch.object(hip, "_is_amd_backend", True), mock.patch.object(
+    hip, "get_rocm_version", return_value=(7, 1)
+), mock.patch.object(hip, "get_device_id", return_value=0), mock.patch.object(
+    hip, "gpu_runtime", mock_gpu_runtime
+), mock.patch.object(
+    hip, "gpu_try"
+):
+    for _ in range(5):
+        hip.get_num_xcc(device_id=0)
+    print(
+        f"get_num_xcc(device_id=0): hipDeviceGetAttribute call_count over 5 calls = "
+        f"{mock_gpu_runtime.hipDeviceGetAttribute.call_count} (not cached -- fires every call)"
+    )
+```
 
 **Steps to Reproduce**
 
-1. [Step 1]
-2. [Step 2]
-3. [Observed result]
+1. Run the exact command block above.
+2. It imports `hip.py` in isolation and prints whether each function carries `functools.lru_cache`.
+3. It then calls `get_rocm_version()` 5 times with `subprocess.run`/`open()` mocked, and `get_num_xcc(device_id=0)` 5 times with `get_rocm_version`, `get_device_id`, and `gpu_runtime` mocked (forcing `hip._is_amd_backend = True` first, since this sandbox only has the CUDA runtime stub loaded, not an AMD one) — and prints each mocked dependency's call count.
 
 **Reproduction Evidence**
 
-- **Commit showing reproduction:** [link to commit in your fork]
-- **Screenshots/logs:** [if applicable]
-- **My findings:** [what you discovered during reproduction; an
-  honest, evidenced cannot-reproduce that led you to re-pick or ask
-  the maintainer belongs here and costs you nothing]
+- **Commit showing reproduction:** none — this is a read-only repro script, not a fix.
+- **Script:** `repro_isolated_hip.py` (this folder), run via the command above.
+- **Output:**
+  ```
+  Imported hip.py OK. _is_amd_backend = False
+  get_rocm_version has lru_cache: True
+  get_num_xcc has lru_cache: False
+
+  get_rocm_version(): subprocess.run call_count over 5 calls = 1 (expected 1, cached)
+  get_num_xcc(device_id=0): hipDeviceGetAttribute call_count over 5 calls = 5 (not cached -- fires every call)
+  ```
+- **My findings:** `get_rocm_version()` already carries `functools.lru_cache` (confirms PR #595 is in place; its mocked `subprocess.run` is called once across 5 invocations, not part of what I'm claiming here). `get_num_xcc()` has no cache: the call count on its mocked dependency (`hipDeviceGetAttribute`) is 5 for 5 calls. I did not measure real timing or cost here — only presence/absence of caching, with every underlying call mocked. My claim comment already treats the real-world cost of this as likely small (microseconds, per PR #595's author); a real cost measurement would need an actual ROCm machine, which I don't have, so I'm scoping this report to the missing cache, not a performance claim.
 
 **Toolkit**
 
-- Tool:
-- What it produced:
-- Difficulties:
-- What changed:
+- Tool: repro-check, run in live mode against `claim-draft.md` and this report together before posting either.
+- What it produced: two rejects before an accept. Round 1 flagged prose-only setup steps, a reproduced-symptom claim that contradicted my own output (PR #595 already fixed `get_rocm_version()`), and an over-claimed "matches the issue exactly." Round 2 flagged that the script itself was unreachable to a stranger reading the posted comment (referenced a "companion file" that wasn't tracked anywhere).
+- Difficulties: getting the wording precise enough that the report claims only what the mocked evidence actually shows (missing cache) and not what it can't show (real-world cost) took two rounds to get right.
+- What changed: rewrote the setup as exact, self-contained commands; reworded the finding to the literal call-count claim above; and pasted the script's full contents inline in this report instead of pointing at an untracked file, so a stranger can run it from the comment alone.
 
 ---
 
