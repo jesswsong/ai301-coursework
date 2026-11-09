@@ -58,11 +58,9 @@ one in the week it belongs to.
 
 I installed issue-scout, wrote a fit profile and three `gh search issues` queries in `search-strategy.md`, and ran two live scans. The first scan rejected all 5 candidates because my ranking filter's tie-break ("most recently updated") was rewarding hours-old, disposable repos that couldn't pass the maturity checks — I fixed it by dropping issues under 48 hours old and tie-breaking on oldest `createdAt` instead. The second scan then surfaced two accepted candidates on a 12-year-old repo, but manually checking it turned up a gap the rubric never caught: its last GitHub Release was from 2016 despite active commits, so I added a new required "release is reasonably recent" check to `rubric.md`.
 
-**Unit 6: [one line on the tool work]**
+**Unit 6: Installed the voice guard, patched the rubric's scope check, set up repo memory**
 
-[2-4 sentences: the voice-guard, the repo-memory file. What broke or
-fell short, and what changed because of it. "Nothing broke" counts when
-it is true - say how you know.]
+I merged three weeks of voice guides into one canonical file, wrote the new "Upstream" rules (claims, questions, pings), and wired a PreToolUse hook that checks every outgoing `gh issue/pr comment`/`create` body against it before it posts. I pipe-tested it directly before trusting it live: a normal command passes through untouched, and a bodyless `gh issue comment --help` gets stopped exactly as designed — nothing broke there. What did fall short was my search process, not the tooling I built: I spent a lot of this week's time vetting candidates found through broad `gh search` (the scout's own search mechanism) that turned out not to exist in the course's actual Issue Selection tracker, which is a separate, smaller, fixed snapshot. I changed my process mid-week to cross-check every candidate against the tracker's own search box before investing time in it, and set up `CLAUDE.local.md` in my fork of `ROCm/iris` so the next session doesn't have to re-learn the subsystem (the GPU-runtime import quirk, which test pattern to follow) from scratch.
 
 **Unit 7: [one line on the tool work]**
 
