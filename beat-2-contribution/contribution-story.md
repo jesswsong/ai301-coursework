@@ -1,4 +1,4 @@
-# Contribution: [Issue Title]
+# Contribution: get_rocm_version() spawns hipconfig on every call, and get_num_xcc() calls it every time
 
 Path: `beat-2-contribution/contribution-story.md`
 
@@ -8,10 +8,9 @@ format criteria grade exactly that. Your course repo link is the whole submissio
 files and no evidence uploads are part of Assignment 5.
 
 **Contribution Number:** [1]
-**Student:** [Student name]
-**GitHub Username:** [your GitHub username, exactly as it appears on your profile - no @, no
-profile URL. Your comments upstream are identified by this name.]
-**Issue:** [GitHub issue link]
+**Student:** jesswsong
+**GitHub Username:** jesswsong
+**Issue:** https://github.com/ROCm/iris/issues/590
 **Pull Request:** [GitHub PR link, once opened]
 
 One repository, built across units 5 to 8, telling the whole story of your real
@@ -79,24 +78,22 @@ drafted, what you did with the draft.]
 
 ## Why I Chose This Issue
 
-[1-2 paragraphs in your own words: how you searched, what your scan
-surfaced, what your scout's verdict said, why this issue fits your
-profile, and what you hope to learn. If your scout's verdict on it
-was reject and you chose it anyway, say so here and say why; choosing
-against your own tool silently is what loses points. Close with an
-honest read of the tool itself: where the scout fell short on a real
-wild search and what you changed or would change, or what convinced
-you it held up. **Record the link to your claim comment in this section too.**
-Not claimed yet? Write `claim pending` and today's date where the link goes,
-and add the link the moment your claim lands.]
+I found this issue by hand, not through a scout scan: I searched the course's AI301 Issue Selection tracker directly (filtering Language=Python, tags like `good first issue`/`help wanted`), since I learned this week that the scout's `gh search issues` queries pull from all of public GitHub, but my real submission has to come from that tracker's own smaller, fixed snapshot — several strong candidates I found through the scout's search machinery (`element-hq/synapse`, `sagemath/sage`, `astronomer/astronomer-cosmos`, `mila-iqia/cluv`) turned out not to be in the tracker at all, so they were never claimable. Once I found `ROCm/iris#590` in the tracker, I ran `issue-scout: grade` on it directly against my patched rubric.
+
+The scout's verdict was **reject**, and I'm choosing it anyway. Every required check passed cleanly — maintainer active, repo active, scope-feasible, not a graveyard, clear description, no AI-contribution ban, nobody currently on it — except the "Release is reasonably recent" check I added in Unit 5, which graded `unclear` because `ROCm/iris` has never published a GitHub Release at all, despite being pushed to daily. That's the same false-negative I designed the check to flag honestly rather than silently miscall: a continuously-shipped internal/framework repo that just doesn't use GitHub's Release feature isn't the same thing as a stale one, and I'd rather accept this issue with eyes open than patch the rubric again under deadline pressure to rubber-stamp my own pick.
+
+It fits my profile: pure Python, a concrete and bounded fix (add `functools.lru_cache` to `get_num_xcc()`, keyed by `device_id`), in an AMD-backed GPU/multi-GPU framework — a real resume-worthy project in the GPU/AI-infra space. What makes it genuinely mine to do, not just a copy of an already-known fix: a merged PR (#595) already cached the sibling function `get_rocm_version()`, and its author *deliberately declined* to cache `get_num_xcc()`, reasoning (without measuring) that what's left there is microseconds of work. I'm not taking that reasoning on faith — my claim comment asks the maintainer directly whether they still want it cached, which is the open design question I hope to learn from working through. I also had to dig in myself to confirm the local hardware blocker the prior contributor hit (no AMD GPU) doesn't actually block me: `hip.py` loads a GPU vendor runtime library at import time, so testing needs a Linux environment with at least the CUDA runtime's shared library installed (no physical GPU required) — a Docker container gets me there.
+
+Honest read of the tool: the scout did its job on the checks it has, but it has two real blind spots I hit this week. First, its "nobody else is already on it" check reads the assignee field and claim comments, but doesn't walk the GitHub cross-reference timeline for PRs that may have *partially* addressed the issue — I found PR #595 by hand with a GraphQL query, not through the scout, and a verdict of "accept" on this issue without that context would have been misleading (I'd have thought I was doing fresh work when half of it was already done). Second, and more structurally: a real-world issue can be in a state the binary accept/reject can't express — "partially done, the remainder is a real but narrower question" is a third shape, not a clean accept or reject, and I didn't try to patch the rubric for it this week (logged as a gap in `scan-notes.md` instead, since a quick patch under deadline pressure felt riskier than naming the gap honestly).
+
+Claim comment: https://github.com/ROCm/iris/issues/590#issuecomment-6731226113
 
 **Toolkit**
 
-- Tool: issue-scout (your scout: your search strategy, your rubric),
-  and how you used it
-- What it produced: [the scan and its verdict on this issue, described]
-- Difficulties: [where it fell short, or "none met" if none did]
-- What changed: [what you patched or would update, or "nothing"]
+- Tool: issue-scout (my search strategy, my rubric), run directly on a single issue URL rather than a live scan, since I'd already found the candidate by hand in the course tracker.
+- What it produced: a reject verdict — every required check passed except "Release is reasonably recent," which came back `unclear` because this repo has never published a GitHub Release.
+- Difficulties: the scout can't distinguish "stale" from "actively shipped but doesn't use Releases," and its claim-check doesn't search the PR cross-reference timeline for partial prior work, so it would have missed PR #595 entirely.
+- What changed: I didn't patch the rubric further this week — the "partially addressed, real remainder" shape doesn't fit a binary accept/reject without more rework than I had time for, so I logged it as a known gap in `scan-notes.md` and overrode the verdict here in writing instead.
 
 ---
 
