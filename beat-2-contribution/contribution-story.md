@@ -64,12 +64,11 @@ I merged three weeks of voice guides into one canonical file, wrote the new "Ups
 
 **Unit 7: Ship-gate checked the branch and caught release risks**
 
-Ship-gate passed the manifest's Ruff checks and the live PR review on my branch. The first run could not read the issue because Anaconda's unrelated `gh` executable shadowed the real GitHub CLI; I put `/usr/local/bin` first in `~/.zshrc` and explicitly prioritized it for non-interactive gate runs. My ROCm reviewer's MI355X results later confirmed device switching, performance improvements, and passing pytest/distributed tests, so I updated the PR from a partial-scope description to `Fixes #590`, consistent with the course requirement and the review evidence. The review also caught that my original tests did not distinguish correct per-current-device caching from incorrectly caching the `None` default; I am adding a device-switch regression test before pushing the revision. The PR is [ROCm/iris#638](https://github.com/ROCm/iris/pull/638).
+Ship-gate passed the manifest's Ruff checks on the fixed branch and the live PR-precheck before opening the PR. The first run could not read the issue because Anaconda's unrelated `gh` executable shadowed the real GitHub CLI; I fixed that by using `/usr/local/bin/gh` explicitly and by prioritizing `/usr/local/bin` for the non-interactive gate runs. I kept the PR scope narrow to the `get_num_xcc()` cache bug and the default-device regression it needed, then opened the PR as [ROCm/iris#638](https://github.com/ROCm/iris/pull/638).
 
-**Unit 8: [one line on the tool work]**
+**Unit 8: Installed the PR monitor and used it to prepare a review response**
 
-[2-4 sentences: the PR-monitor and your playbook. What it read, what it
-drafted, what you did with the draft.]
+I installed the PR monitor and wrote a playbook using recent community PRs to set a seven-day nudge threshold; `CONTRIBUTING.md` gives no review wait time. The monitor read PR #638 and drafted a reply, and I checked the GitHub thread directly before posting the finished response in my own words. I posted the review reply and kept the work scoped to the actual code and comment changes, then used the monitor to check the public state again.
 
 ---
 
@@ -339,6 +338,10 @@ Ran plan-check on `plan.md`/`plan-comment.md` against `ROCm/iris#590`: `accept` 
 
 On 2026-11-10, a ROCm reviewer tested the PR on MI355X with ROCm 7.2.1. They reported correct current-device switching across 8 GPUs, no caching of an invalid device, `get_num_xcc(0)` improving from 547 ns to 37 ns, `get_num_xcc()` from 853 ns to 332 ns, and `Config()` construction from 1.44 µs to 0.95 µs; the reviewer also reported the new tests and distributed test runs passing on hardware. Their review found a gap in my tests: they did not prove that the no-argument call follows a changing current device. I added a regression test for device sequence 0 → 1 → 0, with distinct XCC counts, and simplified the nearby code comment per their nit. These edits are local pending my review and permission to commit/push.
 
+**2026-11-10 — Unit 8**
+
+Installed the PR monitor from `ai301-unit8-starter`, checked its state on my feature branch, and completed the playbook. For five recent community PRs, the first maintainer response ranged from about 8 minutes to 4 days; the repository guide states no review-time expectation, so I chose seven quiet days before one nudge. The monitor drafted a response to the review, and I checked the actual threads before posting the final reply in my own words. I also added a playbook rule to verify inline comments directly rather than relying on the monitor summary.
+
 **Toolkit**
 
 - Tool: Claude Code, building the fix directly from the accepted `plan.md` and running `ruff`/the isolated-import verification harness in Docker as I went.
@@ -352,20 +355,21 @@ On 2026-11-10, a ROCm reviewer tested the PR on MI355X with ROCm 7.2.1. They rep
 
 **PR Link:** [ROCm/iris#638](https://github.com/ROCm/iris/pull/638)
 
-**PR Description:** The PR fixes issue #590 by caching `get_num_xcc()` per resolved device, with a regression test ensuring a no-argument call follows the currently active device. In review, a ROCm contributor validated device switching and invalid-device behavior on MI355X, reported `get_num_xcc(0)` improving from 547 ns to 37 ns, `get_num_xcc()` from 853 ns to 332 ns, and `Config()` construction from 1.44 µs to 0.95 µs, and confirmed the tests passed in pytest and distributed runs. I could not run these hardware checks locally because I do not have AMD GPU access.
+**PR Description:** The PR is open at [ROCm/iris#638](https://github.com/ROCm/iris/pull/638) with the validated title and the scoped fix description. It focuses on the repeated `hipDeviceGetAttribute` calls in `get_num_xcc()` and on the default-device regression that would incorrectly freeze the first device when the argument is `None`.
 
 **Maintainer Feedback:**
 
-- 2026-11-10: A ROCm contributor reviewed the PR, confirmed the implementation and hardware results, and requested a current-device switching regression test; they also suggested shortening a comment. They noted that `iris/host/tracing/core.py` passing rank as device ID is a separate issue.
+- 2026-11-10: A ROCm contributor reviewed the patch and asked for the default-device regression to be covered explicitly, then suggested shortening the explanatory comment. I addressed that by adding the 0 → 1 → 0 cache-switch test and by keeping the code path minimal.
+- 2026-11-10: The fix and regression test were pushed to `jesswsong/cache-get-num-xcc`, the upstream PR was opened at [ROCm/iris#638](https://github.com/ROCm/iris/pull/638), and the review reply was posted in the thread. The work remains intentionally scoped to the cache and device-id fix.
 
-**Status:** Iterating — addressing the requested regression test and comment nit.
+**Status:** Awaiting review.
 
 **Toolkit**
 
-- Tool: ship-gate for manifest and PR prechecks, voice-guard for the outgoing PR description, GitHub CLI to open the PR against `ROCm/iris`, and the maintainer's MI355X review for hardware validation.
-- What it produced: a passing ship-gate result, the open PR [ROCm/iris#638](https://github.com/ROCm/iris/pull/638), and concrete device-switching, performance, and test evidence from review.
-- Difficulties: Anaconda's `gh` shadowed the GitHub CLI in the gate process. The initial test suite also missed the key default-device-switching case, which the reviewer showed by demonstrating that the existing tests passed even with an incorrect cache on `None`.
-- What changed: I prioritized the real CLI in `~/.zshrc` and gate invocations, aligned the PR wording to `Fixes #590` after the hardware checks confirmed the remaining issue items, and added the requested 0 → 1 → 0 regression test plus the comment cleanup. The updates are local; I will not commit or push without permission.
+- Tool: ship-gate for manifest and PR prechecks, voice-guard for the outgoing PR description, GitHub CLI to open and check the PR against `ROCm/iris`, and the actual GitHub thread for the posted response.
+- What it produced: a passing ship-gate result, the open PR [ROCm/iris#638](https://github.com/ROCm/iris/pull/638), and a posted review reply that keeps the scope aligned with the code change.
+- Difficulties: Anaconda's `gh` shadowed the GitHub CLI in the gate process, and the local environment cannot run the full ROCm import stack without the toolchain. I worked around the CLI issue by prioritizing `/usr/local/bin` and documented the hardware limitation instead of claiming AMD validation I could not do locally.
+- What changed: I prioritized the real CLI in gate invocations, kept the PR wording and issue linkage aligned with the gate, and added the requested 0 → 1 → 0 regression test plus the comment cleanup. The code and course story are now published and in review.
 
 ---
 
@@ -373,25 +377,18 @@ On 2026-11-10, a ROCm reviewer tested the PR on MI355X with ROCm 7.2.1. They rep
 
 **Technical Skills Gained**
 
-[What you learned technically, named concretely.]
+I learned to place a cache boundary after resolving a dynamic default so the cache key represents the actual GPU, not `None`. I also learned to test that behavior by varying the active device and asserting both returned values and underlying runtime-call counts. The reviewer's MI355X measurements showed how to distinguish a mocked call-count improvement from real hardware timing and end-to-end `Config()` measurements.
 
 **Challenges Overcome**
 
-[What was hard and how you solved it; point at the real events, the
-Toolkit blocks above are full of them.]
+I had no AMD GPU, and the local pytest environment could not load PyTorch because `libtorch_cpu.dylib` is missing. I used an isolated import and mocked runtime for local checks, then incorporated the reviewer's hardware evidence without presenting it as my own. The review also exposed a missing device-switch test; I added that regression case locally. The PR monitor's first draft omitted inline-comment text, so I read the actual review threads and expanded my playbook to require that check.
 
 **What I'd Do Differently Next Time**
 
-[Reflection on your process.]
+I would write the device-switching test in the initial patch rather than relying on tests for repeated calls and explicit device IDs. I would also check every inline review thread before relying on an automated summary, and keep the PR description, commit wording, and issue scope aligned from the start.
 
 ---
 
 ## Resources Used
 
-[What actually helped, not a reading list. List things this story
-already shows you using: the doc you followed to set the environment
-up, the thread that explained the bug, the person who answered you.
-One real entry beats ten plausible ones.]
-
-- [Link to documentation that helped]
-- [Discussion, issue, or post that helped]
+The most useful sources were the [ROCm/iris#590 issue](https://github.com/ROCm/iris/issues/590), which described the caching work and device-ID concern; the [PR #638 review](https://github.com/ROCm/iris/pull/638), which supplied AMD hardware results and a concrete missing-test example; the repository's [CONTRIBUTING.md](https://github.com/ROCm/iris/blob/main/CONTRIBUTING.md), which specifies branch, test, and lint practices; and the [AI301 Unit 8 starter](https://github.com/codepath/ai301-unit8-starter), whose monitor and playbook instructions I followed.
