@@ -8,10 +8,10 @@ format criteria grade exactly that. Your course repo link is the whole submissio
 files and no evidence uploads are part of Assignment 5.
 
 **Contribution Number:** [1]
-**Student:** jesswsong
+**Student:** Jessica Song
 **GitHub Username:** jesswsong
 **Issue:** https://github.com/ROCm/iris/issues/590
-**Pull Request:** [GitHub PR link, once opened]
+**Pull Request:** [ROCm/iris#638](https://github.com/ROCm/iris/pull/638)
 
 One repository, built across units 5 to 8, telling the whole story of your real
 contribution. Fill it as you work, not at the end — the sections below ask for evidence that
@@ -62,10 +62,9 @@ I installed issue-scout, wrote a fit profile and three `gh search issues` querie
 
 I merged three weeks of voice guides into one canonical file, wrote the new "Upstream" rules (claims, questions, pings), and wired a PreToolUse hook that checks every outgoing `gh issue/pr comment`/`create` body against it before it posts. I pipe-tested it directly before trusting it live: a normal command passes through untouched, and a bodyless `gh issue comment --help` gets stopped exactly as designed — nothing broke there. What did fall short was my search process, not the tooling I built: I spent a lot of this week's time vetting candidates found through broad `gh search` (the scout's own search mechanism) that turned out not to exist in the course's actual Issue Selection tracker, which is a separate, smaller, fixed snapshot. I changed my process mid-week to cross-check every candidate against the tracker's own search box before investing time in it, and set up `CLAUDE.local.md` in my fork of `ROCm/iris` so the next session doesn't have to re-learn the subsystem (the GPU-runtime import quirk, which test pattern to follow) from scratch.
 
-**Unit 7: [one line on the tool work]**
+**Unit 7: Ship-gate checked the branch and caught release risks**
 
-[2-4 sentences: the ship-gate and your gate manifest. What it produced
-on your real branch, what fought you, what changed because of it.]
+Ship-gate passed the manifest's Ruff checks and the live PR review on my branch. The first run could not read the issue because Anaconda's unrelated `gh` executable shadowed the real GitHub CLI; I put `/usr/local/bin` first in `~/.zshrc` and explicitly prioritized it for non-interactive gate runs. My ROCm reviewer's MI355X results later confirmed device switching, performance improvements, and passing pytest/distributed tests, so I updated the PR from a partial-scope description to `Fixes #590`, consistent with the course requirement and the review evidence. The review also caught that my original tests did not distinguish correct per-current-device caching from incorrectly caching the `None` default; I am adding a device-switch regression test before pushing the revision. The PR is [ROCm/iris#638](https://github.com/ROCm/iris/pull/638).
 
 **Unit 8: [one line on the tool work]**
 
@@ -99,26 +98,29 @@ Claim comment: https://github.com/ROCm/iris/issues/590#issuecomment-6731226113
 
 **Problem Description**
 
-[In your own words, what is broken or missing?]
+`get_num_xcc(device_id=None)` in `iris/host/platform/hip.py` recomputes the GPU's XCC (accelerator complex die) count from scratch on every call: it resolves `device_id` via `get_device_id()` when not given, reads `get_rocm_version()` to pick the attribute-lookup branch, and then makes one `hipDeviceGetAttribute` ctypes call into the vendor runtime. All of that work is wasted after the first call, because for a given device the installed ROCm version and that device's XCC count are both constants for the life of the process — they can't change between calls. PR #595 already fixed the sibling problem one layer down (`get_rocm_version()` used to spawn the `hipconfig` subprocess on every call) by caching it with `functools.lru_cache`, but deliberately left `get_num_xcc()` itself uncached, reasoning that what's left after #595 — `get_device_id()` plus one `hipDeviceGetAttribute` call — is microseconds of work not worth caching.
 
 **Expected Behavior**
 
-[What should happen?]
+`get_num_xcc(device_id)` should do its real work (the device-ID resolution and the `hipDeviceGetAttribute` call) once per distinct device and reuse the result on every later call for that same device, the same way `get_rocm_version()` now does for the ROCm version.
 
 **Current Behavior**
 
-[What actually happens?]
+Every call to `get_num_xcc()`, even repeated calls for the same device, re-runs the full body: it re-resolves `device_id` (when not given) and re-issues the `hipDeviceGetAttribute` ctypes call. My reproduction confirms this directly: with the GPU runtime and its dependencies mocked, 5 calls to `get_num_xcc(device_id=0)` produce 5 calls to the mocked `hipDeviceGetAttribute`, not 1.
 
 **Affected Components**
 
-[Which parts of the codebase are involved?]
+- `iris/host/platform/hip.py` — `get_num_xcc(device_id=None)` (line 217), the function to change.
+- `iris/ccl/config.py` — `Config.__post_init__` (line 123-124) calls `iris.hip.get_num_xcc()` with no `device_id`, so it hits the `device_id is None` → `get_device_id()` path on every `Config()` construction where `num_xcds` isn't passed explicitly. This is the hot call site: a benchmark or framework integration that builds a `Config` per collective call pays the uncached cost every time.
+- `iris/host/tracing/core.py` — calls `hip.get_num_xcc(self.iris.cur_rank)` with an explicit `device_id`, once per trace record.
+- ~18 sites across `examples/`, mostly at module scope (paid once); `examples/08_gemm_all_reduce_atomics/matmul_wrapper.py:53` calls it inside a function.
 
 **Toolkit**
 
-- Tool:
-- What it produced:
-- Difficulties:
-- What changed:
+- Tool: read directly — `gh issue view 590 --repo ROCm/iris` (and `--comments` for my own claim comment) for the issue text, then `grep`/`Read` over `iris/host/platform/hip.py`, `iris/ccl/config.py`, and `iris/host/tracing/core.py` to find every caller.
+- What it produced: the exact line numbers and call patterns above, in particular that `Config.__post_init__` is the only caller that hits the `device_id=None` path, which is why the cache has to key on the *resolved* device, not on the literal `None` argument.
+- Difficulties: none — this is close reading of a small, already-mapped file; no tool did anything surprising here.
+- What changed: nothing yet; this section is the basis for the Analysis below.
 
 ---
 
@@ -276,93 +278,94 @@ with mock.patch.object(hip, "_is_amd_backend", True), mock.patch.object(
 
 **Analysis**
 
-[Your analysis of the root cause: what is causing the issue, traced
-to the files and functions involved.]
+Root cause: `get_num_xcc(device_id=None)` (`iris/host/platform/hip.py:217`) has no caching at all, unlike its sibling `get_rocm_version()` (same file, line 155), which PR #595 wrapped in `@functools.lru_cache(maxsize=None)`. The function's own body is pure given its argument — for AMD backends it does `get_device_id()` (only when `device_id is None`), a cheap `get_rocm_version()` lookup (already cached), and one `hipDeviceGetAttribute` ctypes call keyed on the resolved device id; for non-AMD backends it just returns `1`. None of that can change within a process for a given device.
+
+The one subtlety, which the issue itself calls out ("either normalise the argument before caching or cache the inner body"): `device_id` defaults to `None`, and the *caller that matters most*, `Config.__post_init__` (`iris/ccl/config.py:123-124`), always calls `get_num_xcc()` with no argument. `get_device_id()` returns the *currently active* device (`hipGetDevice`/`cudaGetDevice`), which is not a fixed constant — it depends on which device the calling thread has selected (e.g. after `torch.cuda.set_device(...)`). If I put `@functools.lru_cache` directly on `get_num_xcc(device_id=None)`, the literal key for the hottest call site would always be `None`, so the *first* process-wide device would get cached under that key and every later call with `device_id=None` — even from a thread now on a different device — would silently return the first device's XCC count. That would be a correctness bug the issue's own checklist flags ("confirm no caller depends on re-reading either value after a device or environment change").
 
 **Proposed Solution**
 
-[High-level description of your fix approach, and what you are
-deliberately NOT changing.]
+Resolve `device_id` to a concrete value in `get_num_xcc()` *before* the cache lookup (exactly as it already does today, just moved ahead of the cache), and delegate the actual lookup to a private `functools.lru_cache`-wrapped helper keyed on that concrete, resolved `device_id`. This caches correctly per real device no matter whether callers pass `device_id` explicitly or rely on the default, matches the pattern the issue asks for, and needs no change to any call site.
+
+What I am deliberately **not** changing:
+- `get_rocm_version()` — already fixed by PR #595, not mine to touch.
+- Any call site (`Config.__post_init__`, `tracing/core.py`, the ~18 example sites) — the function's signature and return value are unchanged, so none of them need edits.
+- The non-AMD (`_is_amd_backend is False`) short-circuit that returns `1` — still correct to cache, since it's also a per-process constant, and leaving it inside the cached helper keeps one code path instead of two.
+- No timing/benchmark claim: like PR #595, I have no AMD hardware, so my evidence is a call-count assertion (mocked `hipDeviceGetAttribute`), not a wall-clock measurement. The issue's own cost numbers (median 15.6 ms for `hipconfig`, a separate call) don't transfer to this specific `hipDeviceGetAttribute` call, so I won't claim a saving in milliseconds I haven't measured.
 
 **Implementation Plan**
 
-1. [Modify file X to do Y]
-2. [Add or change Z]
-3. [Update tests]
+1. In `iris/host/platform/hip.py`, split `get_num_xcc(device_id=None)` into:
+   - a new private `@functools.lru_cache(maxsize=None)`-decorated function (e.g. `_get_num_xcc_cached(device_id)`) holding the existing body (the `_is_amd_backend` check, the `get_rocm_version()` branch, and the `hipDeviceGetAttribute` call), now always receiving a concrete `device_id`;
+   - the public `get_num_xcc(device_id=None)` keeping only the `if device_id is None: device_id = get_device_id()` resolution, then returning `_get_num_xcc_cached(device_id)`.
+2. Add `tests/unittests/test_get_num_xcc_cache.py`, following the exact pattern `tests/unittests/test_get_rocm_version_cache.py` uses for `get_rocm_version()`: mock `hip._is_amd_backend`, `hip.get_rocm_version`, `hip.get_device_id`, and `hip.gpu_runtime`/`hip.gpu_try`, call `get_num_xcc(device_id=0)` 5 times, and assert the mocked `hipDeviceGetAttribute` is called once, not 5 times. Also add a case calling `get_num_xcc()` (no argument) twice to confirm the `device_id=None` resolution path is cached too, and a case with two different `device_id`s to confirm they get distinct cache entries (not conflated).
+3. Run `ruff check .` / `ruff format . --check` (my ship-manifest's checks) and the new test with plain `pytest` (no hardware needed, same as `test_get_rocm_version_cache.py`).
+4. Update `CLAUDE.local.md`'s notes on `get_num_xcc` once the fix lands, and record anything that deviated from this plan here and in Implementation Notes below.
 
-[Record deviations here as they happen: what changed mid-build and
-why. A recorded deviation is honest work; silent drift is not.]
+No deviations yet — this is the plan before the branch exists.
 
 **Toolkit**
 
-- Tool:
-- What it produced:
-- Difficulties:
-- What changed:
+- Tool: plan-check (live mode), run on `plan.md` (a copy of the Analysis/Proposed Solution/Implementation Plan above) and `plan-comment.md` against `ROCm/iris#590`.
+- What it produced: `accept` on the first run — all three required checks (diagnosis matches reproduction, specific/bounded scope, reproducible tests and expected outcome) passed.
+- Difficulties: a real procedure gap, not a plan problem — my rubric's reproduction-evidence source is "the student's own posted repro comment on the issue," and I deliberately never posted one here (my earlier reproduction already matches what the issue itself documents in full; a duplicate comment would've added nothing new, which my own repro-check scope's wild rules explicitly warn against). The rubric's only written fallback for a missing posted comment is scoped to a "designated house issue," which this real issue isn't, so the letter of my own procedure didn't cover this case.
+- What changed: I quoted the key repro evidence (the call-count result) directly into `plan-comment.md` and graded against that, the same way the scope's house-issue fallback treats a quoted repro pack. I didn't change the rubric or procedure itself this week — I'm naming the gap here rather than patching it under deadline pressure, the same call I made with the scout's "partially addressed" gap in Unit 5.
 
 ---
 
 ## Testing Strategy
 
-[What observable checks prove the fix: your reproduction steps re-run
-against the built change (before and after), and the repo's own test
-suite or checks with the outcome shown. "Tests pass" with nothing
-observable named is not a strategy.]
+Three observable checks, all recorded in `test_evidence.md`:
+
+1. **The reproduction, re-run before and after.** The same isolated-import script from the Reproduction Process section, run against `main` and then against branch `jesswsong/cache-get-num-xcc` in the identical Docker/no-hardware setup. Before: `get_num_xcc(device_id=0)` calling the mocked `hipDeviceGetAttribute` 5 times over 5 calls. After: 1 time over 5 calls — the exact, named delta the fix is supposed to produce, not just "it still runs."
+2. **A new unit test, `tests/unittests/test_get_num_xcc_cache.py`**, following `test_get_rocm_version_cache.py`'s mocked pattern: asserts the call count drops to 1 for repeated calls with the same `device_id`, for the `device_id=None` default-resolution path, and that two different `device_id`s get two separate calls (not wrongly shared). The test file itself needs the full `iris` package import (`triton`/`tritonBLAS`), which isn't installable here without ROCm hardware — the same reason the distributed suite is excluded in `ship-manifest.md` — so I verified its exact assertions against the real `hip.py` on this branch via the isolated-import technique, and will rely on CI to run the committed file directly, same as PR #595 did for its own cache test.
+3. **The manifest's lint/format checks**, run on the branch: `pipx run "ruff<0.16" check .` and `pipx run "ruff<0.16" format . --check`, both clean.
 
 **Toolkit**
 
-- Tool:
-- What it produced:
-- Difficulties:
-- What changed:
+- Tool: the same isolated-import repro script from unit 6 (repro-check already graded it `accept`), re-run against both `main` and the fix branch inside a fresh Docker container each time, plus `pipx run ruff` for the manifest checks.
+- What it produced: a before/after call-count delta (5 → 1) tied directly to the fix, three passing test assertions verified against the real module, and clean lint/format output — all in `test_evidence.md`.
+- Difficulties: the committed test file can't actually run via `pytest` here, since `from iris.host.platform import hip` pulls in the top-level `iris/__init__.py` (triton, git-sourced `tritonBLAS`) that needs a ROCm toolchain I don't have — the same hardware gap as the full suite, just one import deeper than I expected going in.
+- What changed: instead of running the committed test file directly, I re-used the isolated-import harness (stubbing the parent packages, loading `hip.py` from its file path) to run the identical assertions against the real code on the branch, and documented in `test_evidence.md` that CI is still the source of truth for the committed file actually executing.
 
 ---
 
 ## Implementation Notes
 
-[A running log, added to as you work. Date each entry. What you
-built, decisions you made when you made them, wrong turns included.]
+**2026-11-09**
 
-**[Date]**
+Installed the ship-gate (unit 7) and wrote `ship-manifest.md`: `pipx run "ruff<0.16" check .` and `pipx run "ruff<0.16" format . --check` as the must-pass checks (matching `.github/workflows/lint.yml`'s pin and command, with `--check` on the formatter so it reports instead of rewriting files into my diff), and the full `tests/run_tests_distributed.py` suite excluded for needing 2 real AMD GPUs. Tested both PreToolUse hooks with a bare `gh pr create --help` from a nested Claude Code session: both the voice guard and the ship-gate stopped it independently, confirmed in `~/.claude/voice-guard/guard-log.md`.
 
-[Entry]
+Ran plan-check on `plan.md`/`plan-comment.md` against `ROCm/iris#590`: `accept` on the first pass. Built the fix on branch `jesswsong/cache-get-num-xcc`: split `get_num_xcc(device_id=None)` in `iris/host/platform/hip.py` into a public resolver and a new `@functools.lru_cache`-decorated private `_get_num_xcc_cached(device_id)`, exactly as planned — no deviation from `plan.md`. Added `tests/unittests/test_get_num_xcc_cache.py` with three cases (same device repeated, the `device_id=None` default path, two distinct devices). Lint and format both pass clean on the branch. Verified the new test's assertions and the before/after reproduction delta (5 calls → 1) against the real `hip.py` via the isolated-import harness in Docker, recorded in `test_evidence.md`, since the committed test needs the full `iris` package import chain (`triton`/`tritonBLAS`) that isn't installable without a ROCm toolchain.
 
-**[Date]**
-
-[Entry]
+On 2026-11-10, a ROCm reviewer tested the PR on MI355X with ROCm 7.2.1. They reported correct current-device switching across 8 GPUs, no caching of an invalid device, `get_num_xcc(0)` improving from 547 ns to 37 ns, `get_num_xcc()` from 853 ns to 332 ns, and `Config()` construction from 1.44 µs to 0.95 µs; the reviewer also reported the new tests and distributed test runs passing on hardware. Their review found a gap in my tests: they did not prove that the no-argument call follows a changing current device. I added a regression test for device sequence 0 → 1 → 0, with distinct XCC counts, and simplified the nearby code comment per their nit. These edits are local pending my review and permission to commit/push.
 
 **Toolkit**
 
-- Tool:
-- What it produced:
-- Difficulties:
-- What changed:
+- Tool: Claude Code, building the fix directly from the accepted `plan.md` and running `ruff`/the isolated-import verification harness in Docker as I went.
+- What it produced: the `hip.py` diff, the new test file, and `test_evidence.md`'s before/after call-count evidence (5 → 1).
+- Difficulties: the committed test file can't run via plain `pytest` locally (needs the full `iris` package import chain, which needs a ROCm toolchain I don't have) — not something the plan anticipated in that much detail, though the manifest already anticipated hardware gaps generally.
+- What changed: verified the committed test's logic with the isolated-import harness instead of running it directly, and documented that CI is the actual source of truth for the committed file executing — otherwise, no deviation from `plan.md`.
 
 ---
 
 ## Pull Request
 
-**PR Link:** [GitHub PR URL when opened]
+**PR Link:** [ROCm/iris#638](https://github.com/ROCm/iris/pull/638)
 
-**PR Description:** [what the PR says; much of the content above
-adapts into it]
+**PR Description:** The PR fixes issue #590 by caching `get_num_xcc()` per resolved device, with a regression test ensuring a no-argument call follows the currently active device. In review, a ROCm contributor validated device switching and invalid-device behavior on MI355X, reported `get_num_xcc(0)` improving from 547 ns to 37 ns, `get_num_xcc()` from 853 ns to 332 ns, and `Config()` construction from 1.44 µs to 0.95 µs, and confirmed the tests passed in pytest and distributed runs. I could not run these hardware checks locally because I do not have AMD GPU access.
 
 **Maintainer Feedback:**
 
-- [Date]: [feedback received, or "none yet"; silence is a normal
-  state and costs you nothing]
-- [Date]: [how you addressed it]
+- 2026-11-10: A ROCm contributor reviewed the PR, confirmed the implementation and hardware results, and requested a current-device switching regression test; they also suggested shortening a comment. They noted that `iris/host/tracing/core.py` passing rank as device ID is a separate issue.
 
-**Status:** [Awaiting review / Iterating / Merged / Closed. The
-status is a fact you record, never a grade: the PR is graded as
-opened.]
+**Status:** Iterating — addressing the requested regression test and comment nit.
 
 **Toolkit**
 
-- Tool:
-- What it produced:
-- Difficulties:
-- What changed:
+- Tool: ship-gate for manifest and PR prechecks, voice-guard for the outgoing PR description, GitHub CLI to open the PR against `ROCm/iris`, and the maintainer's MI355X review for hardware validation.
+- What it produced: a passing ship-gate result, the open PR [ROCm/iris#638](https://github.com/ROCm/iris/pull/638), and concrete device-switching, performance, and test evidence from review.
+- Difficulties: Anaconda's `gh` shadowed the GitHub CLI in the gate process. The initial test suite also missed the key default-device-switching case, which the reviewer showed by demonstrating that the existing tests passed even with an incorrect cache on `None`.
+- What changed: I prioritized the real CLI in `~/.zshrc` and gate invocations, aligned the PR wording to `Fixes #590` after the hardware checks confirmed the remaining issue items, and added the requested 0 → 1 → 0 regression test plus the comment cleanup. The updates are local; I will not commit or push without permission.
 
 ---
 
