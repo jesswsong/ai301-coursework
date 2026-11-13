@@ -68,7 +68,7 @@ Ship-gate passed the manifest's Ruff checks on the fixed branch and the live PR-
 
 **Unit 8: Installed the PR monitor and used it to prepare a review response**
 
-I installed the PR monitor and wrote a playbook using recent community PRs to set a seven-day nudge threshold; `CONTRIBUTING.md` gives no review wait time. The monitor read PR #638 and drafted a reply, and I checked the GitHub thread directly before posting the finished response in my own words. I posted the review reply and kept the work scoped to the actual code and comment changes, then used the monitor to check the public state again.
+I installed the PR monitor and wrote a playbook using recent community PRs to set a seven-day nudge threshold; `CONTRIBUTING.md` gives no review wait time. The monitor read PR #638 and drafted a reply, and I checked the GitHub thread directly before posting the finished response in my own words. I continue to run the monitor, but it has not reported new PR activity since that reply; I will update the story if new feedback arrives.
 
 ---
 
@@ -334,9 +334,9 @@ Three observable checks, all recorded in `test_evidence.md`:
 
 Installed the ship-gate (unit 7) and wrote `ship-manifest.md`: `pipx run "ruff<0.16" check .` and `pipx run "ruff<0.16" format . --check` as the must-pass checks (matching `.github/workflows/lint.yml`'s pin and command, with `--check` on the formatter so it reports instead of rewriting files into my diff), and the full `tests/run_tests_distributed.py` suite excluded for needing 2 real AMD GPUs. Tested both PreToolUse hooks with a bare `gh pr create --help` from a nested Claude Code session: both the voice guard and the ship-gate stopped it independently, confirmed in `~/.claude/voice-guard/guard-log.md`.
 
-Ran plan-check on `plan.md`/`plan-comment.md` against `ROCm/iris#590`: `accept` on the first pass. Built the fix on branch `jesswsong/cache-get-num-xcc`: split `get_num_xcc(device_id=None)` in `iris/host/platform/hip.py` into a public resolver and a new `@functools.lru_cache`-decorated private `_get_num_xcc_cached(device_id)`, exactly as planned — no deviation from `plan.md`. Added `tests/unittests/test_get_num_xcc_cache.py` with three cases (same device repeated, the `device_id=None` default path, two distinct devices). Lint and format both pass clean on the branch. Verified the new test's assertions and the before/after reproduction delta (5 calls → 1) against the real `hip.py` via the isolated-import harness in Docker, recorded in `test_evidence.md`, since the committed test needs the full `iris` package import chain (`triton`/`tritonBLAS`) that isn't installable without a ROCm toolchain.
+Ran plan-check on `plan.md`/`plan-comment.md` against `ROCm/iris#590`: `accept` on the first pass. Built the fix on branch `jesswsong/cache-get-num-xcc`: split `get_num_xcc(device_id=None)` in `iris/host/platform/hip.py` into a public resolver and a new `@functools.lru_cache`-decorated private `_get_num_xcc_cached(device_id)`, exactly as planned — no deviation from `plan.md`. Added `tests/unittests/test_get_num_xcc_cache.py` with four cases (same device repeated, the `device_id=None` default path, two distinct devices, and switching the current device 0 → 1 → 0). Lint and format both pass clean on the branch. Verified all four test assertions and the before/after reproduction delta (5 calls → 1) against the real `hip.py` via the isolated-import harness in Docker, recorded in `test_evidence.md`, since the committed test needs the full `iris` package import chain (`triton`/`tritonBLAS`) that isn't installable without a ROCm toolchain.
 
-On 2026-11-10, a ROCm reviewer tested the PR on MI355X with ROCm 7.2.1. They reported correct current-device switching across 8 GPUs, no caching of an invalid device, `get_num_xcc(0)` improving from 547 ns to 37 ns, `get_num_xcc()` from 853 ns to 332 ns, and `Config()` construction from 1.44 µs to 0.95 µs; the reviewer also reported the new tests and distributed test runs passing on hardware. Their review found a gap in my tests: they did not prove that the no-argument call follows a changing current device. I added a regression test for device sequence 0 → 1 → 0, with distinct XCC counts, and simplified the nearby code comment per their nit. These edits are local pending my review and permission to commit/push.
+On 2026-11-10, a ROCm reviewer tested the PR on MI355X with ROCm 7.2.1. They reported correct current-device switching across 8 GPUs, no caching of an invalid device, `get_num_xcc(0)` improving from 547 ns to 37 ns, `get_num_xcc()` from 853 ns to 332 ns, and `Config()` construction from 1.44 µs to 0.95 µs; the reviewer also reported the new tests and distributed test runs passing on hardware. Their review found a gap in my tests: they did not prove that the no-argument call follows a changing current device. I added the requested 0 → 1 → 0 regression test, with distinct XCC counts, and simplified the nearby code comment per their nit. I pushed the revision; reviewers remain requested on the PR, and the reported hardware results are theirs rather than local measurements.
 
 **2026-11-10 — Unit 8**
 
@@ -355,12 +355,12 @@ Installed the PR monitor from `ai301-unit8-starter`, checked its state on my fea
 
 **PR Link:** [ROCm/iris#638](https://github.com/ROCm/iris/pull/638)
 
-**PR Description:** The PR is open at [ROCm/iris#638](https://github.com/ROCm/iris/pull/638) with the validated title and the scoped fix description. It focuses on the repeated `hipDeviceGetAttribute` calls in `get_num_xcc()` and on the default-device regression that would incorrectly freeze the first device when the argument is `None`.
+**PR Description:** The PR is open at [ROCm/iris#638](https://github.com/ROCm/iris/pull/638). Its description links issue #590, explains the per-resolved-device cache and the `None` default-device regression, gives the before/after call-count evidence, and distinguishes my local checks from the reviewer-reported MI355X timing and test results. It notes that the unrelated tracing rank/device-ID issue is outside this PR.
 
 **Maintainer Feedback:**
 
 - 2026-11-10: A ROCm contributor reviewed the patch and asked for the default-device regression to be covered explicitly, then suggested shortening the explanatory comment. I addressed that by adding the 0 → 1 → 0 cache-switch test and by keeping the code path minimal.
-- 2026-11-10: The fix and regression test were pushed to `jesswsong/cache-get-num-xcc`, the upstream PR was opened at [ROCm/iris#638](https://github.com/ROCm/iris/pull/638), and the review reply was posted in the thread. The work remains intentionally scoped to the cache and device-id fix.
+- 2026-11-10: The four-test revision was pushed to `jesswsong/cache-get-num-xcc`, and I posted a response in [the PR thread](https://github.com/ROCm/iris/pull/638#issuecomment-6784950557). The reviewer reported successful hardware validation on MI355X; I did not run those AMD tests locally. Reviewers remain requested on the PR, and I am waiting for new feedback.
 
 **Status:** Awaiting review.
 
@@ -369,7 +369,7 @@ Installed the PR monitor from `ai301-unit8-starter`, checked its state on my fea
 - Tool: ship-gate for manifest and PR prechecks, voice-guard for the outgoing PR description, GitHub CLI to open and check the PR against `ROCm/iris`, and the actual GitHub thread for the posted response.
 - What it produced: a passing ship-gate result, the open PR [ROCm/iris#638](https://github.com/ROCm/iris/pull/638), and a posted review reply that keeps the scope aligned with the code change.
 - Difficulties: Anaconda's `gh` shadowed the GitHub CLI in the gate process, and the local environment cannot run the full ROCm import stack without the toolchain. I worked around the CLI issue by prioritizing `/usr/local/bin` and documented the hardware limitation instead of claiming AMD validation I could not do locally.
-- What changed: I prioritized the real CLI in gate invocations, kept the PR wording and issue linkage aligned with the gate, and added the requested 0 → 1 → 0 regression test plus the comment cleanup. The code and course story are now published and in review.
+- What changed: I prioritized the real CLI in gate invocations, kept the PR wording and issue linkage aligned with the gate, and added the requested 0 → 1 → 0 regression test plus the comment cleanup. The code and updated PR description are published; the course-story corrections in this revision remain local until I commit them.
 
 ---
 
